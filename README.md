@@ -53,6 +53,8 @@ cp .env.example .env.local
 
 Populate the keys from your **Supabase Dashboard -> Settings -> API**:
 
+Replace the example values with credentials from your own Supabase project; leaving either public Supabase value unset or unchanged prevents uploads. Confirm that the `product-images` bucket exists (the schema setup above creates it) and that the Storage policies from `supabase/schema.sql` have been applied.
+
 ```env
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 

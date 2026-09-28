@@ -39,7 +39,8 @@ export default function AdminProductsPage() {
   const [stock, setStock] = useState('40');
   const [isBestseller, setIsBestseller] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
-  const [formMsg, setFormMsg] = useState('');
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [formMsg, setFormMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchProducts = async () => {
     try {
@@ -75,7 +76,7 @@ export default function AdminProductsPage() {
     setImageUrl('https://images.unsplash.com/photo-1606312619070-d48b4c652a52?q=80&w=800');
     setStock('40');
     setIsBestseller(false);
-    setFormMsg('');
+    setFormMsg(null);
     setIsModalOpen(true);
   };
 
@@ -90,13 +91,21 @@ export default function AdminProductsPage() {
     setImageUrl(product.images?.[0] || '');
     setStock(product.stock?.toString() || '40');
     setIsBestseller(product.is_bestseller || false);
-    setFormMsg('');
+    setFormMsg(null);
     setIsModalOpen(true);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setFormMsg(null);
+    if (!file.type.startsWith('image/')) {
+      setFormMsg({ type: 'error', text: 'Choose a valid image file.' });
+      input.value = '';
+      return;
+    }
 
     setUploadingImage(true);
     try {
@@ -107,29 +116,29 @@ export default function AdminProductsPage() {
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
-        .upload(filePath, file);
+        .upload(filePath, file, { contentType: file.type });
 
-      if (!uploadError) {
-        const { data: { publicUrl } } = supabase.storage
-          .from('product-images')
-          .getPublicUrl(filePath);
+      if (uploadError) throw uploadError;
 
-        setImageUrl(publicUrl);
-        setFormMsg('Image uploaded to Supabase Storage successfully!');
-      } else {
-        // Use object url preview
-        setImageUrl(URL.createObjectURL(file));
-      }
-    } catch {
-      setImageUrl(URL.createObjectURL(file));
+      const { data } = supabase.storage
+        .from('product-images')
+        .getPublicUrl(filePath);
+      setImageUrl(data.publicUrl);
+      setFormMsg({ type: 'success', text: 'Image uploaded to Supabase Storage successfully!' });
+    } catch (error) {
+      setFormMsg({
+        type: 'error',
+        text: error instanceof Error ? `Image upload failed: ${error.message}` : 'Image upload failed. Please try again.',
+      });
     } finally {
       setUploadingImage(false);
+      input.value = '';
     }
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !price || !description) return;
+    if (!name || !price || !description || uploadingImage || savingProduct) return;
 
     const ingredients = ingredientsText
       .split(',')
@@ -148,48 +157,40 @@ export default function AdminProductsPage() {
       is_bestseller: isBestseller,
     };
 
+    setSavingProduct(true);
+    setFormMsg(null);
     try {
       const supabase = createClient();
 
       if (editingProduct) {
-        // Update
-        await supabase
+        const { data, error } = await supabase
           .from('products')
           .update(productPayload)
-          .eq('id', editingProduct.id);
-
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editingProduct.id ? ({ ...p, ...productPayload } as Product) : p
-          )
-        );
-      } else {
-        // Insert
-        const newId = `prod-${Date.now()}`;
-        const newRecord = { id: newId, ...productPayload } as Product;
-
-        const { data } = await supabase
-          .from('products')
-          .insert(newRecord)
+          .eq('id', editingProduct.id)
           .select()
           .single();
 
-        setProducts([data || newRecord, ...products]);
+        if (error) throw error;
+        setProducts((prev) => prev.map((product) => product.id === data.id ? data : product));
+      } else {
+        const { data, error } = await supabase
+          .from('products')
+          .insert(productPayload)
+          .select()
+          .single();
+
+        if (error) throw error;
+        setProducts((prev) => [data, ...prev]);
       }
 
       setIsModalOpen(false);
-    } catch {
-      if (editingProduct) {
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editingProduct.id ? ({ ...p, ...productPayload } as Product) : p
-          )
-        );
-      } else {
-        const newRecord = { id: `prod-${Date.now()}`, ...productPayload } as Product;
-        setProducts([newRecord, ...products]);
-      }
-      setIsModalOpen(false);
+    } catch (error) {
+      setFormMsg({
+        type: 'error',
+        text: error instanceof Error ? `Product could not be saved: ${error.message}` : 'Product could not be saved. Please try again.',
+      });
+    } finally {
+      setSavingProduct(false);
     }
   };
 
@@ -338,8 +339,15 @@ export default function AdminProductsPage() {
             </div>
 
             {formMsg && (
-              <div className="p-3 rounded-xl bg-emerald-100 border border-emerald-300 text-xs text-emerald-800 font-medium">
-                {formMsg}
+              <div
+                role={formMsg.type === 'error' ? 'alert' : 'status'}
+                className={`p-3 rounded-xl border text-xs font-medium ${
+                  formMsg.type === 'error'
+                    ? 'bg-red-100 border-red-300 text-red-800'
+                    : 'bg-emerald-100 border-emerald-300 text-emerald-800'
+                }`}
+              >
+                {formMsg.text}
               </div>
             )}
 
@@ -464,6 +472,7 @@ export default function AdminProductsPage() {
                         accept="image/*"
                         className="hidden"
                         onChange={handleFileUpload}
+                        disabled={uploadingImage}
                       />
                     </label>
                   </div>
@@ -495,9 +504,10 @@ export default function AdminProductsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-full bg-cocoa-dark text-[#FDF0E6] text-xs font-semibold hover:bg-cocoa shadow-md"
+                  disabled={uploadingImage || savingProduct}
+                  className="px-6 py-2.5 rounded-full bg-cocoa-dark text-[#FDF0E6] text-xs font-semibold hover:bg-cocoa shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingProduct ? 'Update Product' : 'Save & Publish Product'}
+                  {savingProduct ? 'Saving...' : editingProduct ? 'Update Product' : 'Save & Publish Product'}
                 </button>
               </div>
             </form>
